@@ -1,59 +1,24 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useContext } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
-import { format, isToday, isTomorrow, isYesterday, addDays } from 'date-fns'
+import { format, isToday, isTomorrow, isYesterday } from 'date-fns'
+import { useSelector } from 'react-redux'
+import { AuthContext } from '../App'
 import ApperIcon from './ApperIcon'
+import TaskService from '../services/TaskService'
+import CategoryService from '../services/CategoryService'
 
 const MainFeature = () => {
-  const [tasks, setTasks] = useState([
-    {
-      id: '1',
-      title: 'Design new dashboard layout',
-      description: 'Create wireframes and mockups for the analytics dashboard redesign',
-      completed: false,
-      createdAt: new Date(),
-      dueDate: addDays(new Date(), 2),
-      priority: 'high',
-      categoryId: 'design',
-      tags: ['UI/UX', 'Design']
-    },
-    {
-      id: '2',
-      title: 'Review team performance metrics',
-      description: 'Analyze Q4 performance data and prepare monthly report',
-      completed: true,
-      createdAt: new Date(),
-      dueDate: addDays(new Date(), -1),
-      priority: 'medium',
-      categoryId: 'management',
-      tags: ['Analytics', 'Reports']
-    },
-    {
-      id: '3',
-      title: 'Update project documentation',
-      description: 'Document new API endpoints and update integration guides',
-      completed: false,
-      createdAt: new Date(),
-      dueDate: addDays(new Date(), 1),
-      priority: 'low',
-      categoryId: 'development',
-      tags: ['Documentation', 'API']
-    }
-  ])
-
-  const [categories] = useState([
-    { id: 'all', name: 'All Tasks', color: 'bg-surface-500', taskCount: 0 },
-    { id: 'design', name: 'Design', color: 'bg-purple-500', taskCount: 0 },
-    { id: 'development', name: 'Development', color: 'bg-blue-500', taskCount: 0 },
-    { id: 'management', name: 'Management', color: 'bg-green-500', taskCount: 0 },
-    { id: 'marketing', name: 'Marketing', color: 'bg-pink-500', taskCount: 0 }
-  ])
-
+  const [tasks, setTasks] = useState([])
+  const [categories, setCategories] = useState([])
   const [activeCategory, setActiveCategory] = useState('all')
   const [showTaskForm, setShowTaskForm] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState('dueDate')
+  const [loading, setLoading] = useState(false)
+  const [tasksLoading, setTasksLoading] = useState(true)
+  const [categoriesLoading, setCategoriesLoading] = useState(true)
   
   const [newTask, setNewTask] = useState({
     title: '',
@@ -64,11 +29,72 @@ const MainFeature = () => {
     tags: []
   })
 
+  const { user, isAuthenticated } = useSelector((state) => state.user)
+  const { logout } = useContext(AuthContext)
+
+  // Load initial data
+  useEffect(() => {
+    loadTasks()
+    loadCategories()
+  }, [])
+
+  const loadTasks = async () => {
+    setTasksLoading(true)
+    try {
+      const fetchedTasks = await TaskService.fetchTasks()
+      // Transform backend data to match UI expectations
+      const transformedTasks = fetchedTasks.map(task => ({
+        id: task.Id,
+        title: task.title || task.Name || '',
+        description: task.description || '',
+        completed: task.completed ? task.completed.includes('completed') : false,
+        createdAt: task.CreatedOn ? new Date(task.CreatedOn) : new Date(),
+        dueDate: task.due_date ? new Date(task.due_date) : new Date(),
+        priority: task.priority || 'medium',
+        categoryId: task.category || 'development',
+        tags: task.Tags ? (typeof task.Tags === 'string' ? task.Tags.split(',').filter(Boolean) : []) : []
+      }))
+      setTasks(transformedTasks)
+    } catch (error) {
+      console.error('Failed to load tasks:', error)
+      toast.error('Failed to load tasks')
+    } finally {
+      setTasksLoading(false)
+    }
+  }
+
+  const loadCategories = async () => {
+    setCategoriesLoading(true)
+    try {
+      const fetchedCategories = await CategoryService.fetchCategories()
+      // Transform backend data to match UI expectations
+      const transformedCategories = fetchedCategories.map(category => ({
+        id: category.Id || category.id,
+        name: category.Name || category.name || '',
+        color: category.color || 'bg-blue-500',
+        taskCount: 0
+      }))
+      setCategories(transformedCategories)
+    } catch (error) {
+      console.error('Failed to load categories:', error)
+      // Use default categories if loading fails
+      setCategories([
+        { id: 'all', name: 'All Tasks', color: 'bg-surface-500', taskCount: 0 },
+        { id: 'design', name: 'Design', color: 'bg-purple-500', taskCount: 0 },
+        { id: 'development', name: 'Development', color: 'bg-blue-500', taskCount: 0 },
+        { id: 'management', name: 'Management', color: 'bg-green-500', taskCount: 0 },
+        { id: 'marketing', name: 'Marketing', color: 'bg-pink-500', taskCount: 0 }
+      ])
+    } finally {
+      setCategoriesLoading(false)
+    }
+  }
+
   const filteredAndSortedTasks = useMemo(() => {
     let filtered = tasks.filter(task => {
       const matchesCategory = activeCategory === 'all' || task.categoryId === activeCategory
-      const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           task.description.toLowerCase().includes(searchQuery.toLowerCase())
+      const matchesSearch = task.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           task.description?.toLowerCase().includes(searchQuery.toLowerCase())
       return matchesCategory && matchesSearch
     })
 
@@ -112,71 +138,142 @@ const MainFeature = () => {
     }
   }
 
-  const handleCreateTask = () => {
+  const handleCreateTask = async () => {
     if (!newTask.title.trim()) {
       toast.error('Task title is required')
       return
     }
 
-    const task = {
-      id: Date.now().toString(),
-      ...newTask,
-      completed: false,
-      createdAt: new Date(),
-      dueDate: new Date(newTask.dueDate),
-      tags: newTask.tags.filter(tag => tag.trim())
-    }
+    setLoading(true)
+    try {
+      const taskData = {
+        title: newTask.title,
+        Name: newTask.title, // Map to Name field as well
+        description: newTask.description,
+        due_date: newTask.dueDate,
+        priority: newTask.priority,
+        category: newTask.categoryId,
+        Tags: newTask.tags.join(','),
+        completed: false
+      }
 
-    setTasks(prev => [...prev, task])
-    setNewTask({
-      title: '',
-      description: '',
-      dueDate: format(new Date(), 'yyyy-MM-dd'),
-      priority: 'medium',
-      categoryId: 'development',
-      tags: []
-    })
-    setShowTaskForm(false)
-    toast.success('Task created successfully!')
+      const createdTask = await TaskService.createTask(taskData)
+      
+      if (createdTask) {
+        await loadTasks() // Reload tasks to get updated data
+        setNewTask({
+          title: '',
+          description: '',
+          dueDate: format(new Date(), 'yyyy-MM-dd'),
+          priority: 'medium',
+          categoryId: 'development',
+          tags: []
+        })
+        setShowTaskForm(false)
+      }
+    } catch (error) {
+      console.error('Failed to create task:', error)
+      toast.error('Failed to create task')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const handleUpdateTask = () => {
+  const handleUpdateTask = async () => {
     if (!newTask.title.trim()) {
       toast.error('Task title is required')
       return
     }
 
-    setTasks(prev => prev.map(task => 
-      task.id === editingTask.id 
-        ? { ...task, ...newTask, dueDate: new Date(newTask.dueDate) }
-        : task
-    ))
-    setEditingTask(null)
-    setShowTaskForm(false)
-    setNewTask({
-      title: '',
-      description: '',
-      dueDate: format(new Date(), 'yyyy-MM-dd'),
-      priority: 'medium',
-      categoryId: 'development',
-      tags: []
-    })
-    toast.success('Task updated successfully!')
+    if (!editingTask) {
+      toast.error('No task selected for editing')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const taskData = {
+        title: newTask.title,
+        Name: newTask.title, // Map to Name field as well
+        description: newTask.description,
+        due_date: newTask.dueDate,
+        priority: newTask.priority,
+        category: newTask.categoryId,
+        Tags: newTask.tags.join(','),
+        completed: editingTask.completed
+      }
+
+      const updatedTask = await TaskService.updateTask(editingTask.id, taskData)
+      
+      if (updatedTask) {
+        await loadTasks() // Reload tasks to get updated data
+        setEditingTask(null)
+        setShowTaskForm(false)
+        setNewTask({
+          title: '',
+          description: '',
+          dueDate: format(new Date(), 'yyyy-MM-dd'),
+          priority: 'medium',
+          categoryId: 'development',
+          tags: []
+        })
+      }
+    } catch (error) {
+      console.error('Failed to update task:', error)
+      toast.error('Failed to update task')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const handleToggleComplete = (taskId) => {
-    setTasks(prev => prev.map(task =>
-      task.id === taskId 
-        ? { ...task, completed: !task.completed }
-        : task
-    ))
+  const handleToggleComplete = async (taskId) => {
     const task = tasks.find(t => t.id === taskId)
-    toast.success(task?.completed ? 'Task marked as incomplete' : 'Task completed!')
+    if (!task) return
+
+    setLoading(true)
+    try {
+      const taskData = {
+        title: task.title,
+        Name: task.title,
+        description: task.description,
+        due_date: format(task.dueDate, 'yyyy-MM-dd'),
+        priority: task.priority,
+        category: task.categoryId,
+        Tags: task.tags.join(','),
+        completed: !task.completed
+      }
+
+      const updatedTask = await TaskService.updateTask(taskId, taskData)
+      
+      if (updatedTask) {
+        await loadTasks() // Reload tasks to get updated data
+      }
+    } catch (error) {
+      console.error('Failed to update task:', error)
+      toast.error('Failed to update task')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const handleDeleteTask = (taskId) => {
-    setTasks(prev => prev.filter(task => task.id !== taskId))
-    toast.success('Task deleted successfully!')
+  const handleDeleteTask = async (taskId) => {
+    if (!confirm('Are you sure you want to delete this task?')) {
+      return
+    }
+
+    setLoading(true)
+    try {
+      const success = await TaskService.deleteTask(taskId)
+      
+      if (success) {
+        await loadTasks() // Reload tasks to get updated data
+      }
+    } catch (error) {
+      console.error('Failed to delete task:', error)
+      toast.error('Failed to delete task')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleEditTask = (task) => {
@@ -202,9 +299,52 @@ const MainFeature = () => {
     setNewTask(prev => ({ ...prev, tags: prev.tags.filter(tag => tag !== tagToRemove) }))
   }
 
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } catch (error) {
+      console.error('Logout failed:', error)
+    }
+  }
+
+  // Show loading state while data is being fetched
+  if (tasksLoading || categoriesLoading) {
+    return (
+      <section className="px-4 sm:px-6 lg:px-8 pb-12 sm:pb-20">
+        <div className="max-w-7xl mx-auto flex items-center justify-center min-h-[400px]">
+          <div className="text-lg text-surface-600 dark:text-surface-300">Loading tasks...</div>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="px-4 sm:px-6 lg:px-8 pb-12 sm:pb-20">
       <div className="max-w-7xl mx-auto">
+        {/* User Info and Logout */}
+        {isAuthenticated && user && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 flex justify-between items-center bg-white dark:bg-surface-800 rounded-2xl p-4 shadow-soft"
+          >
+            <div>
+              <h2 className="text-lg font-semibold text-surface-900 dark:text-white">
+                Welcome, {user.firstName || user.name || 'User'}!
+              </h2>
+              <p className="text-surface-600 dark:text-surface-300 text-sm">
+                {user.emailAddress || user.email}
+              </p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+            >
+              Logout
+            </button>
+          </motion.div>
+        )}
+
         {/* Stats Cards */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -297,6 +437,7 @@ const MainFeature = () => {
                 })
               }}
               className="w-full gradient-border bg-white dark:bg-surface-800 p-4 rounded-2xl font-medium text-surface-900 dark:text-white hover:bg-surface-50 dark:hover:bg-surface-700 transition-colors flex items-center justify-center space-x-2"
+              disabled={loading}
             >
               <ApperIcon name="Plus" className="w-5 h-5" />
               <span>New Task</span>
@@ -353,6 +494,7 @@ const MainFeature = () => {
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
                         onClick={() => handleToggleComplete(task.id)}
+                        disabled={loading}
                         className={`mt-1 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
                           task.completed
                             ? 'bg-accent border-accent text-white'
@@ -380,6 +522,7 @@ const MainFeature = () => {
                                 whileHover={{ scale: 1.1 }}
                                 whileTap={{ scale: 0.9 }}
                                 onClick={() => handleEditTask(task)}
+                                disabled={loading}
                                 className="p-1 text-surface-400 hover:text-primary-500 transition-colors"
                               >
                                 <ApperIcon name="Edit2" className="w-4 h-4" />
@@ -388,6 +531,7 @@ const MainFeature = () => {
                                 whileHover={{ scale: 1.1 }}
                                 whileTap={{ scale: 0.9 }}
                                 onClick={() => handleDeleteTask(task.id)}
+                                disabled={loading}
                                 className="p-1 text-surface-400 hover:text-red-500 transition-colors"
                               >
                                 <ApperIcon name="Trash2" className="w-4 h-4" />
@@ -412,7 +556,7 @@ const MainFeature = () => {
                             <span>{formatDueDate(task.dueDate)}</span>
                           </div>
                           
-                          {task.tags.length > 0 && (
+                          {task.tags?.length > 0 && (
                             <div className="flex items-center gap-2">
                               {task.tags.map((tag, tagIndex) => (
                                 <span
@@ -600,16 +744,22 @@ const MainFeature = () => {
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={editingTask ? handleUpdateTask : handleCreateTask}
-                      className="flex-1 bg-gradient-to-r from-primary-500 to-secondary-500 text-white px-6 py-3 rounded-xl font-medium shadow-soft hover:shadow-card transition-shadow flex items-center justify-center space-x-2"
+                      disabled={loading}
+                      className="flex-1 bg-gradient-to-r from-primary-500 to-secondary-500 text-white px-6 py-3 rounded-xl font-medium shadow-soft hover:shadow-card transition-shadow flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <ApperIcon name={editingTask ? "Save" : "Plus"} className="w-5 h-5" />
-                      <span>{editingTask ? 'Update Task' : 'Create Task'}</span>
+                      {loading ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <ApperIcon name={editingTask ? "Save" : "Plus"} className="w-5 h-5" />
+                      )}
+                      <span>{loading ? 'Processing...' : (editingTask ? 'Update Task' : 'Create Task')}</span>
                     </motion.button>
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => setShowTaskForm(false)}
-                      className="px-6 py-3 bg-surface-100 dark:bg-surface-700 text-surface-700 dark:text-surface-300 rounded-xl font-medium hover:bg-surface-200 dark:hover:bg-surface-600 transition-colors"
+                      disabled={loading}
+                      className="px-6 py-3 bg-surface-100 dark:bg-surface-700 text-surface-700 dark:text-surface-300 rounded-xl font-medium hover:bg-surface-200 dark:hover:bg-surface-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Cancel
                     </motion.button>
@@ -625,3 +775,4 @@ const MainFeature = () => {
 }
 
 export default MainFeature
+
